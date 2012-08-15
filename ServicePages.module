@@ -1,0 +1,436 @@
+<?php
+
+/**
+ * Web Service: Page Search
+ * 
+ * Allows querying the $pages API variable as a web service 
+ * Serves as a front end to ProcessWire's ProcessPageSearch module, 
+ * making it safely accessible outside of the admin.
+ *
+ * ProcessWire 2.x 
+ * Copyright (C) 2012 by Ryan Cramer 
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ * 
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+class ServicePages extends WireData implements Module, ConfigurableModule {
+
+	const name = 'service-pages';
+
+	/**
+	 * getModuleInfo is a module required by all modules to tell ProcessWire about them
+	 *
+	 * @return array
+	 *
+	 */
+	public static function getModuleInfo() {
+
+		return array(
+			'title' => 'Pages Web Service', 
+			'version' => 1, 
+			'summary' => 'Enables querying the $pages API variable as a web service',
+			'singular' => false, 
+			'autoload' => false, 
+			);
+	}
+
+	/**
+	 * Default settings used by this module
+	 *
+	 */
+	static protected $defaultSettings = array(
+		'queryFields' => array(
+			'id', 
+			'name', 
+			'template', 
+			'parent', 
+			'parent_id', 
+			'created', 
+			'modified', 
+			'created_users_id', 
+			'modified_users_id',
+			'1', // title
+			),
+		'queryTemplates' => array(),
+		'displayFields' => array(
+			'created',
+			'modified',
+			'created_users_id',
+			'modified_users_id',
+			'1',
+			),
+		'maxLimit' => 50,
+		);
+
+	/**
+	 * Runtime error messages that will be sent through the service
+	 *
+	 */
+	protected $errors = array();
+
+	/**
+	 * Debug wrapper markup
+	 *
+	 */
+	protected $debugHead = '<html><head><meta http-equiv="content-type" content="text/html; charset=utf-8" /><meta name="robots" content="noindex, nofollow" /></head><body><pre>';
+	protected $debugFoot = '</pre></body></html>';
+
+	public function __construct() {
+		foreach(self::$defaultSettings as $key => $value) $this->set($key, $value);
+	}
+
+	/**
+	 * Initialize the module
+	 *
+	 * ProcessWire calls this when the module is loaded. For 'autoload' modules, this will be called
+	 * when ProcessWire's API is ready. As a result, this is a good place to attach hooks. 
+	 *
+	 */
+	public function init() {
+	}
+
+	/**
+	 * Sanitize the request with the module's settings
+	 *
+	 */
+	protected function sanitizeRequest() {
+
+		// prevent manual setting of what fields to return
+		if(strlen($this->input->get->display)) {
+			$this->errors[] = "Field 'display' is a reserved word not allowed in queries"; 
+			unset($this->input->get->display); 
+		}
+
+		// if debug is set, that's okay, but remove it from the GET vars
+		if($this->input->get->debug) unset($this->input->get->debug); 
+
+		if(strlen($this->input->get->include) && $this->input->get->include !== 'hidden') {
+			if($this->input->get->include === 'all') {
+				if(!$this->user->isSuperuser()) $this->errors[] = "The option 'include=all' is only allowed for administrators"; 
+			} else {
+				$this->errors[] = "Unrecognized value for 'include'";	
+			}
+		}
+
+		// max limit
+		if($this->input->get->limit && ($this->input->get->limit > 100 || $this->input->get->limit < 0)) {
+			$this->errors[] = "Out of bounds limit setting (max={$this->maxLimit})";
+		} else {
+			$this->input->get->limit = $this->maxLimit;
+		}
+
+		// exit early if there have been any errors so far 
+		if(count($this->errors)) return;
+
+		// sanitize the fields being requested in the query
+		$this->sanitizeRequestFields();
+
+		// convert displayFields from IDs to names
+		$displayFields = $this->displayFields; 
+		foreach($displayFields as $key => $id) {
+			if(ctype_digit("$id")) $displayFields[$key] = (string) $this->fields->get($id); 
+		}
+
+		// populate the $input->get->display variable with our displayFields 
+		$this->input->get->display = implode(',', $displayFields); 
+
+		// sanitize the templates that may be used	
+		$this->sanitizeRequestTemplates();
+	}
+
+	/**
+	 * Sanitize the requested query fields, as used by sanitizeRequest()
+	 *
+	 */
+	protected function sanitizeRequestFields() {
+
+		// convert queryFields (where IDs) to names
+		$queryFields = $this->queryFields; 
+		foreach($queryFields as $key => $id) {
+			if(!ctype_digit("$id")) continue; 
+			$field = $this->fields->get((int) $id); 
+			if($field) $queryFields[$key] = $field->name; 
+		}
+
+		// total fields being queried
+		$total = 0;
+
+		// remove variables that aren't allowed to be queried
+		foreach($this->input->get as $key => $value) {
+
+			if(in_array($key, array('limit', 'start', 'sort', 'include'))) continue; // always allow
+
+			// remove operators
+			$k = trim($key, '<>*$^%!-'); 
+			if(strpos($k, '<') !== false) $k = substr($k, 0, strpos($k, '<'));
+			if(strpos($k, '>') !== false) $k = substr($k, 0, strpos($k, '>'));
+
+			// convert to array
+			if(strpos($k, '|') !== false) $k = explode('|', $k);
+				else if(strpos($k, ',') !== false) $k = explode(',', $k);
+				else $k = array($k);
+
+			foreach($k as $name) {
+				if(in_array($name, $queryFields)) {
+					$total++;
+				} else { 
+					$name = $this->sanitizer->fieldName($name);
+					$this->errors[] = "Field '$name' is not allowed in queries";
+					unset($this->input->get->$key); 
+				}
+			}
+		}
+
+		if(!$total) $this->errors[] = "No valid fields to query";
+	}
+
+	/**
+	 * Sanitize the requested query templates, as used by sanitizeRequest()
+	 *
+	 */
+	protected function sanitizeRequestTemplates() {
+		// convert queryTemplates from IDs to names
+
+		$queryTemplates = $this->queryTemplates; 
+		foreach($queryTemplates as $key => $id) {
+			$template = $this->templates->get((int) $id); 
+			if($template) $queryTemplates[$key] = $template->name;
+				else unset($queryTemplates[$key]);
+		}
+
+		if($this->input->get->template) {
+			// user specified a template in GET var, check if valid
+			$templates = explode('|', $this->input->get->template);
+			foreach($templates as $name) {
+				$name = $this->sanitizer->pageName($name);
+				if(!in_array($name, $queryTemplates)) $this->errors[] = "Template '$name' is not allowed in queries";
+			}
+		} else {
+			// set the allowed templates 
+			$this->input->get->template = implode('|', $queryTemplates); 
+		}
+	}
+
+	protected function sendErrors($debug = false) {
+		// if there were errors then report them and exit
+		if(!count($this->errors)) return;
+		$errors = array('errors' => $this->errors); 
+		if($debug) echo print_r($errors, true); 
+			else echo json_encode($errors); 
+	}
+
+	/**
+	 * Execute the web service and output directly 
+	 *
+	 */
+	public function execute() {
+
+		if(!count($this->input->get)) return $this->instructions();
+
+		// save debug state since sanitizeRequest removes it
+		$debug = $this->input->get->debug; 
+
+		// output the appropriate header depending on the mode
+		if($debug) echo $this->debugHead;
+			else header('Content-Type', 'application/json; charset=UTF-8'); 
+
+		// sanitize the request, making sure everything queried is allowed
+		$this->sanitizeRequest();
+
+		// if errors occurred display and exit
+		if(count($this->errors)) return $this->sendErrors($debug);
+
+		// save the previous ajax state and force it to be on for ProcessPageSearch execution
+		$ajax = $this->config->ajax; 
+		$this->config->ajax = true; 
+
+		// get the ProcessPageSearch module and execute the search
+		$process = $this->modules->get('ProcessPageSearch'); 
+
+		// output the results
+		try {
+			if($debug) echo print_r(json_decode($process->executeFor(), true), true) . $this->debugFoot; 
+				else echo $process->executeFor();
+
+		} catch(Exception $e) {
+			$this->errors[] = $e->getMessage();	
+			$this->sendErrors($debug);
+		}
+
+		// restore ajax state
+		$this->config->ajax = $ajax; 
+	}
+
+	protected function instructions() {
+		$t = new TemplateFile($this->config->paths->ServicePages . "instructions.php"); 
+		$t->set('page', wire('page'));
+		$t->set('queryFields', $this->queryFields);
+		$t->set('queryTemplates', $this->queryTemplates);
+		$t->set('displayFields', $this->displayFields);
+		$t->set('maxLimit', $this->maxLimit); 
+		echo $t->render();
+	}
+
+	/**
+	 * Build a form allowing configuration of this Module
+	 *
+	 */
+	static public function getModuleConfigInputfields(array $data) {
+
+		$basename = self::name . ".php";
+		$src = wire('config')->paths->ServicePages . $basename; 
+		$dst = wire('config')->paths->templates . $basename; 
+		if(!is_file($dst)) {
+			$src = $this->config->urls->ServicePages . $basename; 
+			$dst = $this->config->urls->templates . $basename; 
+			wire('modules')->error("The $basename template file is not installed - please copy it now from $src to $dst"); 
+		}
+
+		foreach(self::$defaultSettings as $key => $value) {
+			if(!isset($data[$key])) $data[$key] = $value; 
+		}
+
+		$modules = wire('modules');
+		$inputfields = new InputfieldWrapper();
+
+		$queryFields = $modules->get('InputfieldAsmSelect'); 	
+		$queryFields->name = 'queryFields';
+		$queryFields->label = 'Fields that may be queried by the web service'; 
+		$queryFields->required = 1; 
+		foreach(self::$defaultSettings['queryFields'] as $name) $queryFields->addOption($name); 
+
+		$queryTemplates = $modules->get('InputfieldAsmSelect'); 
+		$queryTemplates->name = 'queryTemplates';
+		$queryTemplates->label = 'Pages using these templates will be queried by the web service';
+		$queryTemplates->required = 1; 
+		foreach(wire('templates') as $template) $queryTemplates->addOption($template->id, $template->name); 
+
+		$displayFields = $modules->get('InputfieldAsmSelect'); 
+		$displayFields->name = 'displayFields';
+		$displayFields->label = 'Fields that will be included in results';
+		$displayFields->notes = 'Note that id, parent_id, template, path and name are always included in results.';
+		foreach(self::$defaultSettings['displayFields'] as $name) if(!ctype_digit("$name")) $displayFields->addOption($name); 
+
+		foreach(wire('fields') as $field) {
+			if($field->type instanceof FieldtypFieldsetOpen || $field->type instanceof FieldtypePassword) continue; 
+			$queryFields->addOption($field->id, $field->name); 			
+			$displayFields->addOption($field->id, $field->name); 
+		}	
+
+		$queryFields->value = $data['queryFields'];
+		$queryTemplates->value = $data['queryTemplates'];
+		$displayFields->value = $data['displayFields'];
+
+		$inputfields->add($queryFields); 
+		$inputfields->add($queryTemplates); 
+		$inputfields->add($displayFields); 
+
+		$f = $modules->get('InputfieldInteger');
+		$f->name = 'maxLimit';
+		$f->label = 'Maximum pages to match per request';
+		$f->notes = 'Pagination (/page[n]/) in the URL may be used to paginate between result pages.';
+		$f->value = $data['maxLimit'];
+		$inputfields->add($f);
+
+		$help = $modules->get('InputfieldMarkup');
+		$help->label = 'How to use this module';
+		$page = wire('pages')->get("template=" . self::name . ", name=" . self::name); 
+		$help->value = "<p>For instructions and examples, please see the <a target='_blank' href='{$page->url}'>Pages Web Service page</a> after saving your configuration.</p>";
+		$inputfields->add($help); 
+
+
+		return $inputfields;
+	}
+
+	/**
+	 * Install the module
+	 *
+	 */
+	public function ___install() {
+
+		$name = self::name;
+
+		$page = $this->pages->get("/$name/"); 
+		if($page->id) throw new WireException("There is already a page installed called '/$name/'"); 
+
+		$template = $this->templates->get($name);
+		if($template) throw new WireException("There is already a template installed called '$name'"); 
+
+		$fieldgroup = $this->fieldgroups->get($name);
+		if($fieldgroup) throw new WireException("There is already a fieldgroup installed called '$name'"); 
+
+		$fieldgroup = new Fieldgroup();
+		$fieldgroup->name = $name; 
+		$title = $this->fields->get('title');
+		if($title) $fieldgroup->add($title); 
+		$fieldgroup->save();
+
+		$template = new Template();
+		$template->name = $name;
+		$template->fieldgroup = $fieldgroup; 
+		$template->allowPageNum = 1; 
+		$template->save();
+		$this->message("Installed template $name"); 
+
+		$page = new Page();
+		$page->template = $template; 
+		$page->parent = '/';
+		$page->name = $name; 
+		$page->title = "Pages Web Service";
+		$page->addStatus(Page::statusHidden); 
+		$page->save();
+		$this->message("Installed page $page->path"); 
+
+		$basename = $name . ".php";
+		$src = $this->config->paths->ServicePages . $basename;
+		$dst = $this->config->paths->templates . $basename;
+		if(@copy($src, $dst)) $this->message("Installed template file $basename"); 
+			else $this->error("Templates directory is not writable so we were unable to auto-install the $basename template file."); 
+
+		// populate initial config data
+		$configData = $this->defaultSettings; 
+		foreach($this->fields as $field) {
+			if($field->type instanceof FieldtypeFieldsetOpen || $field->type instanceof FieldtypePassword) continue; 
+			$configData['queryFields'][] = $field->id; 
+			if($field->name == 'title') $configData['displayFields'][] = $field->id; 
+		}
+
+	}
+
+	/**
+	 * Uninstall the module
+	 *
+	 */
+	public function ___uninstall() {
+
+		$name = self::name;
+
+		$page = $this->pages->get("template=$name, name=$name"); 
+		if($page->id) {
+			$this->message("Deleted page {$page->path}"); 
+			$this->pages->delete($page);
+		}
+
+		$template = $this->templates->get($name);
+		if($template) {
+			$this->message("Deleted template $name"); 
+			$this->templates->delete($template); 
+		}
+
+		$fieldgroup = $this->fieldgroups->get($name);
+		if($fieldgroup) {
+			$this->message("Deleted fieldgroup $name"); 
+			$this->fieldgroups->delete($fieldgroup);
+		}
+
+		$templateFile = $this->config->paths->templates . $name . ".php";
+		if(is_file($templateFile)) { 
+			if(@unlink($templateFile)) $this->message("Deleted template file $templateFile"); 
+				else $this->error("Unable to remove file '$templateFile', please delete it manually at your convenience."); 
+		}
+	}
+}
+
