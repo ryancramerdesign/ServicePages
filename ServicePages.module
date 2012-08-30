@@ -116,7 +116,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 		}
 
 		// max limit
-		if($this->input->get->limit && ($this->input->get->limit > 100 || $this->input->get->limit < 0)) {
+		if($this->input->get->limit && ($this->input->get->limit > $this->maxLimit || $this->input->get->limit < 0)) {
 			$this->errors[] = "Out of bounds limit setting (max={$this->maxLimit})";
 		} else {
 			$this->input->get->limit = $this->maxLimit;
