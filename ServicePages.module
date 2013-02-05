@@ -118,8 +118,6 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 		// max limit
 		if($this->input->get->limit && ($this->input->get->limit > $this->maxLimit || $this->input->get->limit < 0)) {
 			$this->errors[] = "Out of bounds limit setting (max={$this->maxLimit})";
-		} else {
-			$this->input->get->limit = $this->maxLimit;
 		}
 
 		// exit early if there have been any errors so far 
@@ -284,8 +282,8 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 		$src = wire('config')->paths->ServicePages . $basename; 
 		$dst = wire('config')->paths->templates . $basename; 
 		if(!is_file($dst)) {
-			$src = $this->config->urls->ServicePages . $basename; 
-			$dst = $this->config->urls->templates . $basename; 
+			$src = wire('config')->urls->ServicePages . $basename; 
+			$dst = wire('config')->urls->templates . $basename; 
 			wire('modules')->error("The $basename template file is not installed - please copy it now from $src to $dst"); 
 		}
 
