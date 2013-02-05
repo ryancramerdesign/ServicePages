@@ -118,6 +118,7 @@
 	<h1>ProcessWire Pages Web Service Instructions</h1>
 
 	<p>These instructions are being shown because no query was specified in the URL.</p>
+	<p>You are welcome to move this page wherever you want to in your site structure.</p>
 
 	<h2>Examples</h2>
 
