@@ -159,7 +159,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 		// remove variables that aren't allowed to be queried
 		foreach($this->input->get as $key => $value) {
 
-			if(in_array($key, array('limit', 'start', 'sort', 'include'))) continue; // always allow
+			if(in_array($key, array('limit', 'start', 'sort', 'include', 'callback', '_'))) continue; // always allow
 
 			// remove operators
 			$k = trim($key, '<>*$^%!-'); 
@@ -230,10 +230,14 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 
 		// save debug state since sanitizeRequest removes it
 		$debug = $this->input->get->debug; 
+		$callbackGet = $this->input->get->callback;
 
 		// output the appropriate header depending on the mode
 		if($debug) echo $this->debugHead;
-			else header('Content-Type', 'application/json; charset=UTF-8'); 
+		else header('Access-Control-Allow-Origin: *');
+		
+		$callback = isset($callbackGet) ? preg_replace('/[^a-z0-9$_]/si', '', $callbackGet) : false;
+		header('Content-Type: ' . ($callback ? 'application/javascript' : 'application/json') . ';charset=UTF-8'); 
 
 		// sanitize the request, making sure everything queried is allowed
 		$this->sanitizeRequest();
@@ -250,8 +254,9 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 
 		// output the results
 		try {
-			if($debug) echo print_r(json_decode($process->executeFor(), true), true) . $this->debugFoot; 
-				else echo $process->executeFor();
+			if($debug) echo print_r(json_decode($process->executeFor(), true), true) . $this->debugFoot;
+			elseif(!empty($callbackGet)) echo ($callback ? $callback . '(' : '') . $process->executeFor() . ($callback ? ')' : ''); 
+			else echo $process->executeFor();
 
 		} catch(Exception $e) {
 			$this->errors[] = $e->getMessage();	
