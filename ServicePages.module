@@ -30,7 +30,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 
 		return array(
 			'title' => 'Pages Web Service', 
-			'version' => 1, 
+			'version' => 4, 
 			'summary' => 'Enables querying the $pages API variable as a web service',
 			'singular' => false, 
 			'autoload' => false, 
@@ -172,13 +172,27 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 				else $k = array($k);
 
 			foreach($k as $name) {
+				if(strpos($name, '-')) list($name, $subname) = explode('-', $name);
+					else $subname = '';
+
 				if(in_array($name, $queryFields)) {
 					$total++;
-				} else { 
+
+				} else {
 					$name = $this->sanitizer->fieldName($name);
 					$this->errors[] = "Field '$name' is not allowed in queries";
 					unset($this->input->get->$key); 
+					continue;
 				}
+
+				if(strlen($subname) && !in_array($subname, $queryFields)) {
+					$subname = $this->sanitizer->fieldName($subname); 	
+					$this->errors[] = "Field '$name.$subname' is not allowed in queries";
+					unset($this->input->get->$key); 
+					$total--;
+					continue; 
+				}
+
 			}
 		}
 
@@ -233,7 +247,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 
 		// output the appropriate header depending on the mode
 		if($debug) echo $this->debugHead;
-			else header('Content-Type', 'application/json; charset=UTF-8'); 
+			else header('Content-Type: application/json'); 
 
 		// sanitize the request, making sure everything queried is allowed
 		$this->sanitizeRequest();
