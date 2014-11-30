@@ -32,7 +32,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 
 		return array(
 			'title' => 'Pages Web Service', 
-			'version' => 5, 
+			'version' => 6, 
 			'summary' => 'Enables querying the $pages API variable as a web service',
 			'singular' => false, 
 			'autoload' => false, 
@@ -266,7 +266,7 @@ class ServicePages extends WireData implements Module, ConfigurableModule {
 		$modules = $this->modules; 
 		if(method_exists($modules, 'getModule')) {
 			// PW 2.4.5+ checks module permissions
-			$process = $modules->getModule('ProcessPageSearch', array('noPermissionCheck')); 
+			$process = $modules->getModule('ProcessPageSearch', array('noPermissionCheck' => true)); 
 		} else {
 			$process = $modules->get('ProcessPageSearch'); 
 		}
